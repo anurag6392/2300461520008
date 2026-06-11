@@ -1,500 +1,683 @@
-# Stage 1 – Notification REST API Design
+# Stage 1
 
-This document defines the REST APIs and real-time mechanism for a campus notification platform that delivers updates about Placements, Events, and Results to logged-in students.
+## Notification Platform – REST API Design & Contract
 
-## Core Actions
+### Core Actions Supported
 
-- Create a notification (by an admin or system process).
-- Fetch notifications for a user (with pagination and filters).
-- Fetch unread notifications for a user.
-- Mark a notification as read.
-- Mark all notifications as read.
-- Delete a notification for a user.
-- Subscribe to real-time notification updates.
+The notification platform supports the following core actions:
 
-## REST API Endpoints
-
-Assumption: Users accessing the APIs are already authenticated by the platform, and the backend derives the current user from context or headers.
-
-| Action                          | Method | Endpoint                             | Description                                      |
-|---------------------------------|--------|--------------------------------------|--------------------------------------------------|
-| Create notification             | POST   | /notifications                       | Create a new notification                        |
-| Get notifications (paginated)   | GET    | /notifications                       | List notifications for the current user          |
-| Get unread notifications        | GET    | /notifications/unread                | List unread notifications for the current user   |
-| Mark notification as read       | PATCH  | /notifications/{notificationId}/read | Mark a single notification as read               |
-| Mark all as read                | PATCH  | /notifications/read-all              | Mark all notifications as read for the user      |
-| Delete notification             | DELETE | /notifications/{notificationId}      | Delete (hide) a single notification for the user |
-| Real-time stream (SSE/WebSocket)| GET    | /notifications/stream                | Subscribe to real-time notification updates      |
-
-## Common Headers
-
-All APIs assume that the user is pre-authorised by the platform.
-
-- `Content-Type: application/json`
-- `Accept: application/json`
-- `X-Request-Id` (optional, for tracing and logging)
-- `X-User-Id` (optional; used if the backend does not derive user from token)
+1. **Fetch notifications** – retrieve all notifications for the logged-in user
+2. **Fetch a single notification** – get details of a specific notification
+3. **Mark notification(s) as read** – update read status
+4. **Delete a notification** – remove a notification
+5. **Mark all as read** – bulk update
+6. **Get unread count** – badge/count for UI indicator
+7. **Subscribe to real-time notifications** – SSE or WebSocket endpoint
 
 ---
 
-## Endpoint Details and JSON Contracts
+### Base URL
 
-### POST /notifications
+```
+https://api.example.com/v1
+```
 
-Creates a new notification that will be delivered to one or more target users or groups.
+All endpoints require the `Authorization` header with a valid Bearer token (JWT).
 
-**Request Headers**
+---
 
-- `Content-Type: application/json`
-- `X-User-Id`: ID of the admin or system creating the notification (optional if inferred)
+### Common Headers
 
-**Request Body (JSON)**
+#### Request Headers
 
 ```json
 {
-  "title": "Drive: ABC Corp",
-  "message": "ABC Corp is visiting on 20th June. Register before 18th June.",
-  "type": "PLACEMENT",
-  "target": {
-    "audienceType": "DEPARTMENT",
-    "department": "CSE",
-    "batch": 2026
-  },
-  "priority": "HIGH",
-  "scheduledAt": "2026-06-15T10:00:00Z",
-  "meta": {
-    "link": "https://example.com/registration"
+  "Authorization": "Bearer <jwt_token>",
+  "Content-Type": "application/json",
+  "Accept": "application/json",
+  "X-Request-ID": "uuid-v4-string"
+}
+```
+
+#### Response Headers
+
+```json
+{
+  "Content-Type": "application/json",
+  "X-Request-ID": "uuid-v4-string",
+  "X-RateLimit-Limit": "100",
+  "X-RateLimit-Remaining": "95",
+  "X-RateLimit-Reset": "1718097600"
+}
+```
+
+---
+
+### Endpoints
+
+---
+
+#### 1. GET `/notifications`
+
+**Description:** Retrieve a paginated list of notifications for the authenticated user.
+
+**Query Parameters:**
+
+| Parameter  | Type    | Required | Description                              |
+|------------|---------|----------|------------------------------------------|
+| `page`     | integer | No       | Page number (default: 1)                 |
+| `limit`    | integer | No       | Results per page (default: 20, max: 100) |
+| `is_read`  | boolean | No       | Filter by read/unread status             |
+| `type`     | string  | No       | Filter by notification type              |
+
+**Request:**
+
+```
+GET /notifications?page=1&limit=20&is_read=false
+Authorization: Bearer <jwt_token>
+```
+
+**Response: 200 OK**
+
+```json
+{
+  "success": true,
+  "data": {
+    "notifications": [
+      {
+        "id": "notif_01HZ9K2X3P",
+        "user_id": "user_abc123",
+        "type": "appointment_reminder",
+        "title": "Upcoming Appointment",
+        "message": "You have an appointment scheduled for tomorrow at 10:00 AM.",
+        "is_read": false,
+        "metadata": {
+          "appointment_id": "appt_789",
+          "doctor_name": "Dr. Sharma"
+        },
+        "created_at": "2026-06-10T08:30:00Z",
+        "updated_at": "2026-06-10T08:30:00Z"
+      }
+    ],
+    "pagination": {
+      "page": 1,
+      "limit": 20,
+      "total": 45,
+      "total_pages": 3,
+      "has_next": true,
+      "has_prev": false
+    }
   }
 }
 ```
 
-**Field Description**
+---
 
-- `title` (string, required): Short title of the notification.
-- `message` (string, required): Detailed message to show to the user.
-- `type` (string, required): Category of notification, e.g. `PLACEMENT`, `EVENT`, `RESULT`.
-- `target` (object, required): Target audience definition (department, batch, etc.).
-- `priority` (string, optional): `LOW`, `MEDIUM`, or `HIGH`.
-- `scheduledAt` (string, optional, ISO 8601): When to send, if scheduled.
-- `meta` (object, optional): Extra key-value data (e.g., links).
+#### 2. GET `/notifications/:id`
 
-**Response Body (JSON)**
+**Description:** Retrieve a single notification by its ID.
+
+**Path Parameters:**
+
+| Parameter | Type   | Required | Description         |
+|-----------|--------|----------|---------------------|
+| `id`      | string | Yes      | Notification ID     |
+
+**Request:**
+
+```
+GET /notifications/notif_01HZ9K2X3P
+Authorization: Bearer <jwt_token>
+```
+
+**Response: 200 OK**
 
 ```json
 {
-  "notificationId": "notif_12345",
-  "status": "CREATED",
-  "createdAt": "2026-06-11T08:00:00Z"
+  "success": true,
+  "data": {
+    "id": "notif_01HZ9K2X3P",
+    "user_id": "user_abc123",
+    "type": "appointment_reminder",
+    "title": "Upcoming Appointment",
+    "message": "You have an appointment scheduled for tomorrow at 10:00 AM.",
+    "is_read": false,
+    "metadata": {
+      "appointment_id": "appt_789",
+      "doctor_name": "Dr. Sharma"
+    },
+    "created_at": "2026-06-10T08:30:00Z",
+    "updated_at": "2026-06-10T08:30:00Z"
+  }
+}
+```
+
+**Response: 404 Not Found**
+
+```json
+{
+  "success": false,
+  "error": {
+    "code": "NOTIFICATION_NOT_FOUND",
+    "message": "Notification with the given ID does not exist."
+  }
 }
 ```
 
 ---
 
-### GET /notifications
+#### 3. PATCH `/notifications/:id/read`
 
-Returns paginated notifications for the current user, with optional filters.
+**Description:** Mark a specific notification as read.
 
-**Request Headers**
+**Path Parameters:**
 
-- `Accept: application/json`
-- `X-User-Id`: current user (optional if inferred)
+| Parameter | Type   | Required | Description     |
+|-----------|--------|----------|-----------------|
+| `id`      | string | Yes      | Notification ID |
 
-**Query Parameters**
+**Request:**
 
-- `page` (integer, optional, default 1)
-- `pageSize` (integer, optional, default 20)
-- `type` (string, optional, e.g., `PLACEMENT`, `EVENT`, `RESULT`)
-- `status` (string, optional, e.g., `READ`, `UNREAD`)
+```
+PATCH /notifications/notif_01HZ9K2X3P/read
+Authorization: Bearer <jwt_token>
+```
 
-**Response Body (JSON)**
+**Response: 200 OK**
 
 ```json
 {
-  "page": 1,
-  "pageSize": 20,
-  "totalItems": 42,
-  "items": [
-    {
-      "id": "notif_12345",
-      "title": "Drive: ABC Corp",
-      "message": "ABC Corp is visiting on 20th June. Register before 18th June.",
-      "type": "PLACEMENT",
-      "priority": "HIGH",
-      "status": "UNREAD",
-      "createdAt": "2026-06-11T08:00:00Z",
-      "readAt": null,
-      "meta": {
-        "link": "https://example.com/registration"
-      }
-    }
-  ]
+  "success": true,
+  "data": {
+    "id": "notif_01HZ9K2X3P",
+    "is_read": true,
+    "updated_at": "2026-06-11T09:00:00Z"
+  }
 }
 ```
 
 ---
 
-### GET /notifications/unread
+#### 4. PATCH `/notifications/read-all`
 
-Returns unread notifications for the current user.
+**Description:** Mark all unread notifications as read for the authenticated user.
 
-**Request Headers**
+**Request:**
 
-- `Accept: application/json`
-- `X-User-Id`: current user (optional if inferred)
+```
+PATCH /notifications/read-all
+Authorization: Bearer <jwt_token>
+```
 
-**Response Body (JSON)**
+**Response: 200 OK**
 
 ```json
 {
-  "items": [
-    {
-      "id": "notif_12345",
-      "title": "Drive: ABC Corp",
-      "message": "ABC Corp is visiting on 20th June. Register before 18th June.",
-      "type": "PLACEMENT",
-      "priority": "HIGH",
-      "status": "UNREAD",
-      "createdAt": "2026-06-11T08:00:00Z",
-      "meta": {
-        "link": "https://example.com/registration"
-      }
-    }
-  ]
+  "success": true,
+  "data": {
+    "updated_count": 12
+  }
 }
 ```
 
 ---
 
-### PATCH /notifications/{notificationId}/read
+#### 5. DELETE `/notifications/:id`
 
-Marks a specific notification as read for the current user.
+**Description:** Delete a specific notification.
 
-**Request Headers**
+**Path Parameters:**
 
-- `Content-Type: application/json`
-- `X-User-Id`: current user
+| Parameter | Type   | Required | Description     |
+|-----------|--------|----------|-----------------|
+| `id`      | string | Yes      | Notification ID |
 
-**Request Body (JSON)**
+**Request:**
 
-```json
-{
-  "read": true
-}
+```
+DELETE /notifications/notif_01HZ9K2X3P
+Authorization: Bearer <jwt_token>
 ```
 
-**Response Body (JSON)**
+**Response: 200 OK**
 
 ```json
 {
-  "id": "notif_12345",
-  "status": "READ",
-  "readAt": "2026-06-11T09:00:00Z"
-}
-```
-
----
-
-### PATCH /notifications/read-all
-
-Marks all notifications for the current user as read.
-
-**Request Headers**
-
-- `Content-Type: application/json`
-- `X-User-Id`: current user
-
-**Response Body (JSON)**
-
-```json
-{
-  "updatedCount": 15
+  "success": true,
+  "message": "Notification deleted successfully."
 }
 ```
 
 ---
 
-### DELETE /notifications/{notificationId}
+#### 6. GET `/notifications/unread-count`
 
-Deletes (or hides) a notification for the current user (soft delete).
+**Description:** Get the count of unread notifications for the authenticated user (used for UI badge).
 
-**Request Headers**
+**Request:**
 
-- `X-User-Id`: current user
+```
+GET /notifications/unread-count
+Authorization: Bearer <jwt_token>
+```
 
-**Response Body (JSON)**
+**Response: 200 OK**
 
 ```json
 {
-  "id": "notif_12345",
-  "deleted": true
+  "success": true,
+  "data": {
+    "unread_count": 7
+  }
 }
 ```
 
 ---
 
-## Real-Time Notification Mechanism
+### Notification Object Schema
 
-For real-time updates, the platform can use **Server-Sent Events (SSE)** to push notifications from the server to the browser over a long-lived HTTP connection. Alternatively, a WebSocket endpoint can be used with the same payload structure.
+```json
+{
+  "id": "string (unique identifier, prefixed: notif_)",
+  "user_id": "string (reference to the authenticated user)",
+  "type": "string (enum: appointment_reminder | lab_result | prescription_update | system_alert | message | billing)",
+  "title": "string (short, human-readable title)",
+  "message": "string (full notification body)",
+  "is_read": "boolean (default: false)",
+  "metadata": "object (optional, type-specific additional data)",
+  "created_at": "string (ISO 8601 datetime)",
+  "updated_at": "string (ISO 8601 datetime)"
+}
+```
 
-### GET /notifications/stream (SSE)
+---
 
-**Behavior**
+### Error Response Schema
 
-- The frontend opens a persistent connection to `/notifications/stream`.
-- When a new notification relevant to the user is created, the backend pushes an SSE event.
-- The client updates the UI (badge counts, notification list) immediately.
+All error responses follow a consistent structure:
 
-**Request**
+```json
+{
+  "success": false,
+  "error": {
+    "code": "string (machine-readable error code)",
+    "message": "string (human-readable description)",
+    "details": "object (optional, validation errors or extra context)"
+  }
+}
+```
 
-- Method: `GET`
-- Headers:
-  - `Accept: text/event-stream`
-  - `X-User-Id`: current user
+**Common HTTP Error Codes:**
 
-**Example SSE event**
+| Status | Code                    | Description                          |
+|--------|-------------------------|--------------------------------------|
+| 400    | `INVALID_REQUEST`       | Malformed request or bad parameters  |
+| 401    | `UNAUTHORIZED`          | Missing or invalid JWT token         |
+| 403    | `FORBIDDEN`             | Action not permitted for this user   |
+| 404    | `NOTIFICATION_NOT_FOUND`| Resource does not exist              |
+| 429    | `RATE_LIMIT_EXCEEDED`   | Too many requests                    |
+| 500    | `INTERNAL_SERVER_ERROR` | Unexpected server error              |
 
-```text
+---
+
+### Real-Time Notification Mechanism
+
+#### Approach: Server-Sent Events (SSE)
+
+SSE is recommended over WebSockets for one-way server-to-client notification delivery. It is simpler to implement, works over standard HTTP/2, supports automatic reconnection natively in browsers, and is well-suited for read-only push events.
+
+**Endpoint:** `GET /notifications/stream`
+
+```
+GET /notifications/stream
+Authorization: Bearer <jwt_token>
+Accept: text/event-stream
+Cache-Control: no-cache
+Connection: keep-alive
+```
+
+**Response: 200 OK (persistent stream)**
+
+```
+Content-Type: text/event-stream
+X-Accel-Buffering: no
+
 event: notification
-data: {
-  "id": "notif_12345",
-  "title": "Drive: ABC Corp",
-  "message": "ABC Corp is visiting on 20th June. Register before 18th June.",
-  "type": "PLACEMENT",
-  "priority": "HIGH",
-  "status": "UNREAD",
-  "createdAt": "2026-06-11T08:00:00Z"
-}
+data: {"id":"notif_01HZ9K2X3P","type":"appointment_reminder","title":"Upcoming Appointment","message":"You have an appointment tomorrow at 10:00 AM.","is_read":false,"created_at":"2026-06-11T09:15:00Z"}
+
+event: ping
+data: {"timestamp":"2026-06-11T09:15:30Z"}
 ```
 
-If WebSockets are preferred, the client connects to a `/notifications/ws` endpoint and receives JSON messages with the same fields.
+**SSE Event Types:**
+
+| Event          | Description                                              |
+|----------------|----------------------------------------------------------|
+| `notification` | A new notification has been created for the user         |
+| `read`         | A notification has been marked as read (sync across tabs)|
+| `delete`       | A notification has been deleted                          |
+| `ping`         | Heartbeat sent every 30 seconds to keep connection alive |
+
+**Client Reconnection:** Browsers automatically reconnect using the `Last-Event-ID` header. The server should replay missed events since that ID.
+
+**Fallback:** For environments not supporting SSE, clients can poll `GET /notifications?is_read=false` every 30–60 seconds.
 
 ---
 
-# Stage 2 – Persistent Storage Design
+---
 
-This section defines the database choice, schema, scaling concerns, and example queries for implementing the notification APIs defined in Stage 1.
+# Stage 2
 
-## Choice of Database
+## Persistent Storage – DB Design, Schema, Scalability & Queries
 
-I recommend using a relational database such as **PostgreSQL** for the notification system.
+### Recommended Database: PostgreSQL
 
-Reasons:
+**Rationale:**
 
-- Notifications are inherently relational: they are associated with users, types, and potential delivery logs.
-- We need efficient filtering and pagination by user, status, type, and time, which relational databases handle well.
-- Strong consistency is preferred so that unread/read state is reliable for each user.
+PostgreSQL is the recommended choice for the notification platform due to the following reasons:
 
-## Database Schema
+- **Structured, relational data**: Notifications have a well-defined schema with a clear relationship to users, making a relational model a natural fit.
+- **JSONB support**: The `metadata` field is flexible and type-specific. PostgreSQL's `JSONB` type supports efficient indexing and querying of semi-structured data without sacrificing relational integrity.
+- **ACID compliance**: Guarantees consistency for operations like marking all notifications as read.
+- **Scalability features**: Supports table partitioning, partial indexes, and connection pooling (via PgBouncer), which address the high-volume challenges described below.
+- **Mature ecosystem**: Well-supported with ORMs, migration tools, and monitoring integrations.
 
-A simple relational schema with three core tables works well: `users`, `notifications`, and `notification_recipients`.
-
-### Table: users
-
-Stores basic user information relevant for targeting.
-
-- `id` (PK, UUID)
-- `name` (text)
-- `email` (text, unique)
-- `department` (text)
-- `batch` (integer)
-
-### Table: notifications
-
-Stores the content and metadata of each notification.
-
-- `id` (PK, UUID)
-- `title` (text)
-- `message` (text)
-- `type` (text) – e.g., `PLACEMENT`, `EVENT`, `RESULT`
-- `priority` (text) – e.g., `LOW`, `MEDIUM`, `HIGH`
-- `created_by` (UUID, FK to users.id, nullable for system-generated)
-- `scheduled_at` (timestamptz, nullable)
-- `created_at` (timestamptz, default `NOW()`)
-- `meta` (jsonb, optional)
-- Index on (`type`, `priority`, `created_at`)
-
-### Table: notification_recipients
-
-Stores which user receives which notification and the user-specific state.
-
-- `id` (PK, UUID)
-- `notification_id` (UUID, FK to notifications.id)
-- `user_id` (UUID, FK to users.id)
-- `status` (text) – `UNREAD`, `READ`, `DELETED`
-- `read_at` (timestamptz, nullable)
-- `created_at` (timestamptz, default `NOW()`)
-- Index on (`user_id`, `status`, `created_at`)
-- Index on (`notification_id`)
-
-This schema supports all the Stage 1 APIs (creation, listing, read/unread, deletion) while remaining flexible for future features like archiving or delivery logs.
-
-## Scaling Challenges
-
-As data volume grows, several problems can arise:
-
-- **Large notification history**  
-  - The `notification_recipients` table can grow to millions of rows as notifications are sent to many users.  
-  - Queries like `GET /notifications` and `GET /notifications/unread` may slow down without proper indexing.
-
-- **High write volume**  
-  - Creating notifications and marking them as read are frequent write operations.  
-  - Hot indexes (on `user_id` and `status`) can become bottlenecks.
-
-- **Storage bloat**  
-  - Old notifications (e.g., older than a year) may no longer be relevant but still consume storage and degrade performance.
-
-## Approaches to Solve Scaling Problems
-
-- **Index optimization**
-  - Maintain composite indexes on (`user_id`, `status`, `created_at`) to speed up unread and recent queries.
-  - Periodically monitor index usage and rebuild or drop unused indexes.
-
-- **Pagination and sensible limits**
-  - Enforce pagination in APIs with a reasonable maximum `pageSize`.
-  - Encourage clients to load only recent notifications by default and lazy-load older ones.
-
-- **Archival strategy**
-  - Move old notifications (e.g., older than 12 months) from main tables to archive tables or cold storage.
-  - Keep only recent notifications in the primary `notifications` and `notification_recipients` tables.
-
-- **Table partitioning**
-  - Partition `notification_recipients` by `created_at` (monthly/yearly) or by user ranges in very large deployments.
-  - This keeps indexes smaller and improves query performance for recent data.
-
-- **Caching**
-  - Cache unread counts per user in a fast store such as Redis.
-  - Update the cache when notifications are created or marked as read, reducing DB load on every poll.
-
-## Example SQL Queries
-
-The following SQL queries correspond to the REST APIs defined in Stage 1.
-
-### 1. Create notification and assign recipients
-
-Insert a new notification:
-
-```sql
-INSERT INTO notifications (
-  id,
-  title,
-  message,
-  type,
-  priority,
-  created_by,
-  scheduled_at,
-  meta,
-  created_at
-) VALUES (
-  :notification_id,
-  :title,
-  :message,
-  :type,
-  :priority,
-  :created_by,
-  :scheduled_at,
-  :meta::jsonb,
-  NOW()
-);
-```
-
-Assign the notification to a recipient (example for one user; in practice this can be a bulk insert):
-
-```sql
-INSERT INTO notification_recipients (
-  id,
-  notification_id,
-  user_id,
-  status,
-  created_at
-) VALUES (
-  :recipient_id,
-  :notification_id,
-  :user_id,
-  'UNREAD',
-  NOW()
-);
-```
-
-### 2. Get notifications for current user (paginated)
-
-```sql
-SELECT
-  nr.id AS recipient_row_id,
-  n.id AS notification_id,
-  n.title,
-  n.message,
-  n.type,
-  n.priority,
-  nr.status,
-  nr.created_at,
-  nr.read_at,
-  n.meta
-FROM notification_recipients nr
-JOIN notifications n ON n.id = nr.notification_id
-WHERE nr.user_id = :user_id
-  AND (:type IS NULL OR n.type = :type)
-  AND (:status IS NULL OR nr.status = :status)
-ORDER BY nr.created_at DESC
-LIMIT :page_size OFFSET (:page - 1) * :page_size;
-```
-
-### 3. Get unread notifications for current user
-
-```sql
-SELECT
-  nr.id AS recipient_row_id,
-  n.id AS notification_id,
-  n.title,
-  n.message,
-  n.type,
-  n.priority,
-  nr.status,
-  nr.created_at,
-  n.meta
-FROM notification_recipients nr
-JOIN notifications n ON n.id = nr.notification_id
-WHERE nr.user_id = :user_id
-  AND nr.status = 'UNREAD'
-ORDER BY nr.created_at DESC;
-```
-
-### 4. Mark a single notification as read
-
-```sql
-UPDATE notification_recipients
-SET status = 'READ',
-    read_at = NOW()
-WHERE notification_id = :notification_id
-  AND user_id = :user_id
-  AND status <> 'DELETED';
-```
-
-### 5. Mark all notifications as read for a user
-
-```sql
-UPDATE notification_recipients
-SET status = 'READ',
-    read_at = NOW()
-WHERE user_id = :user_id
-  AND status = 'UNREAD';
-```
-
-### 6. Delete a notification for a user (soft delete)
-
-```sql
-UPDATE notification_recipients
-SET status = 'DELETED'
-WHERE notification_id = :notification_id
-  AND user_id = :user_id;
-```
-
-These queries, combined with the schema and API design above, provide a complete end-to-end design for the notification platform required in Stage 1 and Stage 2.
+A NoSQL alternative like **MongoDB** would be a valid choice if the schema were highly variable or the team prioritised horizontal write scaling from day one, but for a notification service with a predictable schema, PostgreSQL's query power and consistency guarantees are the better tradeoff.
 
 ---
 
-# Stage 3 – Query Optimization and Indexing
+### DB Schema
 
-An earlier developer in the team chose a relational database for storage (MySQL or PostgreSQL or any other SQL database) about 3 months ago. The database has grown to 50,000 students and 5,000,000 notifications. The developer had written the query below, which is now performing slowly:
+```sql
+-- Users table (referenced; assumed to exist in the wider system)
+CREATE TABLE users (
+    id          VARCHAR(64) PRIMARY KEY,
+    email       VARCHAR(255) NOT NULL UNIQUE,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Notification types enum
+CREATE TYPE notification_type AS ENUM (
+    'appointment_reminder',
+    'lab_result',
+    'prescription_update',
+    'system_alert',
+    'message',
+    'billing'
+);
+
+-- Core notifications table
+CREATE TABLE notifications (
+    id          VARCHAR(64)       PRIMARY KEY,              -- e.g. notif_01HZ9K2X3P
+    user_id     VARCHAR(64)       NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    type        notification_type NOT NULL,
+    title       VARCHAR(255)      NOT NULL,
+    message     TEXT              NOT NULL,
+    is_read     BOOLEAN           NOT NULL DEFAULT FALSE,
+    metadata    JSONB,                                       -- flexible, type-specific payload
+    created_at  TIMESTAMPTZ       NOT NULL DEFAULT NOW(),
+    updated_at  TIMESTAMPTZ       NOT NULL DEFAULT NOW()
+);
+
+-- Index: fetch all notifications for a user (most common query)
+CREATE INDEX idx_notifications_user_id
+    ON notifications (user_id, created_at DESC);
+
+-- Index: fetch unread notifications for a user (badge count + filtered list)
+CREATE INDEX idx_notifications_unread
+    ON notifications (user_id, is_read)
+    WHERE is_read = FALSE;                                   -- partial index
+
+-- Index: filter by type per user
+CREATE INDEX idx_notifications_user_type
+    ON notifications (user_id, type);
+
+-- Trigger to auto-update updated_at
+CREATE OR REPLACE FUNCTION update_updated_at_column()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = NOW();
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_notifications_updated_at
+    BEFORE UPDATE ON notifications
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+```
+
+---
+
+### Scalability Problems & Solutions
+
+As data volume grows (millions of notifications across hundreds of thousands of users), the following problems emerge:
+
+#### Problem 1: Table size and slow full-table scans
+
+**Issue:** A single `notifications` table with 100M+ rows makes even indexed queries slower due to index bloat and vacuum overhead.
+
+**Solution – Range Partitioning by `created_at`:**
+
+```sql
+-- Re-create as partitioned table (applied at schema design time)
+CREATE TABLE notifications (
+    id         VARCHAR(64)       NOT NULL,
+    user_id    VARCHAR(64)       NOT NULL,
+    type       notification_type NOT NULL,
+    title      VARCHAR(255)      NOT NULL,
+    message    TEXT              NOT NULL,
+    is_read    BOOLEAN           NOT NULL DEFAULT FALSE,
+    metadata   JSONB,
+    created_at TIMESTAMPTZ       NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ       NOT NULL DEFAULT NOW()
+) PARTITION BY RANGE (created_at);
+
+-- Monthly partitions
+CREATE TABLE notifications_2026_06
+    PARTITION OF notifications
+    FOR VALUES FROM ('2026-06-01') TO ('2026-07-01');
+
+CREATE TABLE notifications_2026_07
+    PARTITION OF notifications
+    FOR VALUES FROM ('2026-07-01') TO ('2026-08-01');
+-- etc.
+```
+
+Old partitions can be detached and archived (e.g., to S3 via `pg_partman`), keeping the active table small.
+
+---
+
+#### Problem 2: Unread count query becomes expensive
+
+**Issue:** `SELECT COUNT(*) WHERE user_id = ? AND is_read = FALSE` on a large table is slow even with an index when many users query simultaneously.
+
+**Solution – Denormalized counter table:**
+
+```sql
+CREATE TABLE notification_counts (
+    user_id      VARCHAR(64) PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    unread_count INTEGER NOT NULL DEFAULT 0,
+    updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Increment on insert of unread notification
+-- Decrement on mark-as-read
+-- Managed via application logic or DB triggers
+```
+
+The `GET /notifications/unread-count` endpoint then reads from this O(1) lookup table instead of aggregating the main table.
+
+---
+
+#### Problem 3: Write throughput at scale
+
+**Issue:** High-frequency notification inserts (e.g., system-wide alerts sent to all users) can overwhelm synchronous writes.
+
+**Solution – Async write queue:**
+
+Use a message queue (e.g., Redis Streams, RabbitMQ, or Kafka) to buffer notification creation events. A worker pool consumes the queue and performs batched inserts into PostgreSQL. This decouples the API response time from DB write latency.
+
+---
+
+#### Problem 4: Old notifications accumulate indefinitely
+
+**Solution – TTL-based archival policy:**
+
+Automatically move or delete notifications older than a defined threshold (e.g., 90 days for read notifications) using a scheduled job or partition detachment.
+
+---
+
+### SQL Queries Based on Stage 1 APIs
+
+#### `GET /notifications` – Paginated list for a user
+
+```sql
+SELECT
+    id,
+    user_id,
+    type,
+    title,
+    message,
+    is_read,
+    metadata,
+    created_at,
+    updated_at
+FROM notifications
+WHERE user_id = $1
+  AND ($2::boolean IS NULL OR is_read = $2)   -- optional is_read filter
+  AND ($3::notification_type IS NULL OR type = $3) -- optional type filter
+ORDER BY created_at DESC
+LIMIT $4 OFFSET $5;                             -- $4 = limit, $5 = (page-1)*limit
+
+-- Count query for pagination metadata
+SELECT COUNT(*)
+FROM notifications
+WHERE user_id = $1
+  AND ($2::boolean IS NULL OR is_read = $2);
+```
+
+---
+
+#### `GET /notifications/:id` – Fetch single notification
+
+```sql
+SELECT
+    id,
+    user_id,
+    type,
+    title,
+    message,
+    is_read,
+    metadata,
+    created_at,
+    updated_at
+FROM notifications
+WHERE id = $1
+  AND user_id = $2;   -- enforce ownership
+```
+
+---
+
+#### `PATCH /notifications/:id/read` – Mark one as read
+
+```sql
+UPDATE notifications
+SET is_read = TRUE
+WHERE id = $1
+  AND user_id = $2
+  AND is_read = FALSE   -- no-op guard
+RETURNING id, is_read, updated_at;
+
+-- Decrement counter
+UPDATE notification_counts
+SET unread_count = GREATEST(unread_count - 1, 0),
+    updated_at   = NOW()
+WHERE user_id = $2;
+```
+
+---
+
+#### `PATCH /notifications/read-all` – Mark all as read
+
+```sql
+WITH updated AS (
+    UPDATE notifications
+    SET is_read = TRUE
+    WHERE user_id = $1
+      AND is_read = FALSE
+    RETURNING id
+)
+SELECT COUNT(*) AS updated_count FROM updated;
+
+-- Reset counter
+UPDATE notification_counts
+SET unread_count = 0,
+    updated_at   = NOW()
+WHERE user_id = $1;
+```
+
+---
+
+#### `DELETE /notifications/:id` – Delete a notification
+
+```sql
+DELETE FROM notifications
+WHERE id = $1
+  AND user_id = $2;
+
+-- If it was unread, decrement counter
+UPDATE notification_counts
+SET unread_count = GREATEST(unread_count - 1, 0),
+    updated_at   = NOW()
+WHERE user_id = $2
+  AND EXISTS (
+      SELECT 1 FROM notifications
+      WHERE id = $1 AND is_read = FALSE
+  );
+```
+
+---
+
+#### `GET /notifications/unread-count` – Unread badge count
+
+```sql
+-- Fast path: denormalized counter
+SELECT unread_count
+FROM notification_counts
+WHERE user_id = $1;
+
+-- Fallback (if counter table not yet populated):
+SELECT COUNT(*) AS unread_count
+FROM notifications
+WHERE user_id = $1
+  AND is_read = FALSE;
+```
+
+---
+
+#### Insert new notification (internal service / worker)
+
+```sql
+INSERT INTO notifications (id, user_id, type, title, message, metadata)
+VALUES ($1, $2, $3, $4, $5, $6::jsonb)
+RETURNING *;
+
+-- Increment unread counter (upsert)
+INSERT INTO notification_counts (user_id, unread_count)
+VALUES ($2, 1)
+ON CONFLICT (user_id)
+DO UPDATE SET
+    unread_count = notification_counts.unread_count + 1,
+    updated_at   = NOW();
+```
+
+---
+
+# Stage 3
+
+## Query Optimization and Indexing
+
+An earlier developer chose a relational database (MySQL / PostgreSQL) 3 months ago. The database has grown to **50,000 students** and **5,000,000 notifications**. The following query is now performing slowly:
 
 ```sql
 SELECT * FROM notifications
@@ -502,23 +685,18 @@ WHERE studentID = 1042 AND isRead = false
 ORDER BY createdAt ASC;
 ```
 
-## Is this query accurate?
+### Is this query logically accurate?
 
-Yes, the query is **logically accurate** for fetching unread notifications of a specific student. It correctly filters by `studentID` and `isRead = false`, and orders by recency.
+Yes. It correctly filters by `studentID` and `isRead = false`, and orders by `createdAt` ascending. The logic is sound, but the implementation has serious performance problems at scale.
 
-## Why is this slow?
+### Why is it slow?
 
-Reasons:
+1. **`SELECT *`** fetches every column, increasing I/O and memory usage even when only a few fields are needed by the UI.
+2. **No composite index** on `(studentID, isRead, createdAt)` forces a full table scan or large range scan over 5,000,000 rows.
+3. **`ORDER BY createdAt`** without an index-supported sort requires PostgreSQL/MySQL to sort the filtered result set in memory — an expensive extra step.
+4. **No `LIMIT`** means the query can return thousands of rows in one shot, overwhelming both the DB and the application layer.
 
-1. **`SELECT *`** fetches all columns, increasing I/O and memory usage, especially when the table has many columns.
-2. **No suitable index** on `(studentID, isRead, createdAt)` forces a large scan over many rows.
-3. With 50,000 students and 5,000,000 notifications, this becomes a full table scan or large range scan.
-4. **`ORDER BY createdAt`** without an index on `createdAt` forces an extra sort step after filtering.
-5. No `LIMIT` is used, so the query may return all unread notifications for that student, which can be large.
-
-## What would you change?
-
-Improved query:
+### Improved query
 
 ```sql
 SELECT
@@ -536,444 +714,256 @@ ORDER BY createdAt ASC
 LIMIT 100;
 ```
 
-Changes:
+**Changes made:**
+- Select only the columns the application actually needs instead of `SELECT *`.
+- Add `LIMIT 100` so the backend paginates results rather than fetching everything at once.
+- Both changes reduce I/O, memory pressure, and network transfer.
 
-- Select only needed columns instead of `SELECT *`.
-- Add `LIMIT 100` to avoid fetching all rows on every request; the backend will paginate.
-- This reduces I/O and memory usage.
+### Indexing strategy
 
-## Indexing strategy
-
-Instead of adding indexes on every column:
-
-- Add a **composite index**:
-
-  ```sql
-  CREATE INDEX idx_notifications_student_unread_created
-    ON notifications (studentID, isRead, createdAt);
-  ```
-
-This allows:
-
-- Fast filtering by `studentID` and `isRead`.
-- Direct ordering by `createdAt` without extra sort overhead.
-
-Adding indexes on every column:
-
-- Increases write cost (indexes must be updated on every INSERT/UPDATE).
-- Uses more disk space.
-- Can degrade performance for write-heavy operations.
-- Not effective if the query pattern is not aligned with the index.
-
-So, the advice to add indexes on every column is **not effective**.
-
-## Query: students with placement notification in last 7 days
+Add a single **composite index** that covers the filter columns and the sort column:
 
 ```sql
+CREATE INDEX idx_notifications_student_unread_created
+  ON notifications (studentID, isRead, createdAt);
+```
+
+This index allows the database to:
+- Seek directly to rows for `studentID = 1042`.
+- Filter `isRead = false` within that seek.
+- Return rows already ordered by `createdAt` — no extra sort step.
+
+**Why not index every column?**
+
+Adding an index on every column is counter-productive:
+- Every `INSERT` and `UPDATE` must maintain all indexes, increasing write latency.
+- Indexes consume significant disk space.
+- The query planner may choose a suboptimal index if too many exist.
+- Indexes only help queries whose `WHERE` and `ORDER BY` clauses align with the index column order.
+
+The composite index above is sufficient for all read-heavy queries in this platform.
+
+### Query: students who received a placement notification in the last 7 days
+
+```sql
+-- PostgreSQL
 SELECT DISTINCT studentID
 FROM notifications
 WHERE notificationType = 'Placement'
   AND createdAt >= NOW() - INTERVAL '7 days';
-```
 
-Or in MySQL:
-
-```sql
+-- MySQL
 SELECT DISTINCT studentID
 FROM notifications
 WHERE notificationType = 'Placement'
   AND createdAt >= NOW() - INTERVAL 7 DAY;
 ```
 
-This query uses the `notificationType` column and `createdAt` for filtering, and will benefit from the composite index defined above if extended to include `notificationType`.
+This query benefits from a composite index on `(notificationType, createdAt)` or the broader index extended to include `notificationType`.
 
 ---
 
-# Stage 4 – Performance Caching and Strategies
+# Stage 4
 
-Problem:  
-Notifications are being fetched on each page load for every student. The DB is getting overwhelmed, causing bad user experience.
+## Performance Caching and Strategies
 
-## Suggested solutions
+**Problem:** Notifications are fetched on every page load for every student, overwhelming the database and causing a poor user experience.
 
-### 1. Use caching (Redis) for unread counts and recent notifications
+### Solution 1 — Redis Caching (Recommended)
 
-**Approach:**
+Cache both the unread count and recent notifications per student in Redis.
 
-- Cache:
-  - Unread notification count per student.
-  - Recent notifications (e.g., last 20–50) for each student.
-- On each page load:
-  - First, check cache.
-  - If cache has data, return it.
-  - If cache misses, fetch from DB and update cache.
+**Cache keys:**
+- `unread_count:{studentID}` → integer
+- `notifications:{studentID}:{page}:{pageSize}` → JSON array
 
-**Tradeoffs:**
+**Flow:**
+1. On page load, check Redis for the student's data.
+2. If cache hit → return immediately (sub-millisecond).
+3. If cache miss → query the DB, populate the cache, return.
 
-- **Pros:**
-  - Reduces DB load significantly.
-  - Faster response times for repeated page loads.
-  - Can handle high traffic with many students.
-- **Cons:**
-  - Need to manage cache invalidation when notifications are created or read.
-  - Adds complexity (cache layer, TTL, consistency).
-  - Requires extra infrastructure (Redis).
+**Cache invalidation:**
+- A new notification is created → increment `unread_count:{studentID}`, delete the page caches for that student.
+- A notification is marked as read → decrement `unread_count:{studentID}`, delete affected page caches.
+- A notification is deleted → same as mark-as-read invalidation.
 
-**Implementation sketch:**
+**TTL:** 5–10 minutes as a safety net, even with event-driven invalidation.
 
-- Cache key: `unread_count:{studentID}`
-- Cache key: `notifications:{studentID}:{page}:{pageSize}`
-- TTL: e.g., 5–10 minutes, or invalidate on write (create/mark read/delete).
+| Pros | Cons |
+|------|------|
+| Dramatically reduces DB load | Requires Redis infrastructure |
+| Sub-millisecond reads for cached data | Cache invalidation logic adds complexity |
+| Handles high concurrent traffic well | Stale data possible if invalidation is missed |
 
-### 2. Database optimization and pagination
+### Solution 2 — Database Query Optimization and Pagination
 
-**Approach:**
+Use the composite index from Stage 3, enforce `LIMIT`/`OFFSET` pagination, and eliminate `SELECT *`.
 
-- Use the composite index from Stage 3.
-- Enforce pagination with `LIMIT` and `OFFSET`.
-- Avoid `SELECT *`.
+| Pros | Cons |
+|------|------|
+| No extra infrastructure needed | Still hits DB on every request |
+| Simple to implement | Not sufficient alone for very high traffic |
 
-**Tradeoffs:**
+### Solution 3 — Asynchronous Background Workers
 
-- **Pros:**
-  - Reduces DB scan cost.
-  - Works even without extra infrastructure.
-- **Cons:**
-  - Still requires DB queries for each request.
-  - Not sufficient alone for very high traffic.
+Use background workers (Node.js workers, Python Celery, BullMQ, etc.) to:
+- Pre-compute and warm the cache for active students.
+- Handle bulk operations such as `notify_all` without blocking API responses.
 
-### 3. Asynchronous background jobs for heavy operations
+| Pros | Cons |
+|------|------|
+| Keeps API response times low | Adds message queue infrastructure |
+| Best for bulk/batch operations | Failure handling and retries add complexity |
 
-**Approach:**
+### Recommended Combined Strategy
 
-- Use background workers (e.g., Node.js workers, Python Celery, etc.) to:
-  - Precompute unread counts.
-  - Pre-fetch and cache recent notifications.
-  - Handle bulk operations (e.g., `notify_all`).
+1. **Add the composite index** (Stage 3) — zero infrastructure cost, immediate improvement.
+2. **Cache unread counts and recent notifications in Redis** — biggest single impact on DB load.
+3. **Use background workers for `notify_all`** — keeps bulk sends from blocking real-time requests.
 
-**Tradeoffs:**
-
-- **Pros:**
-  - Reduces main request latency.
-  - Better for bulk notifications.
-- **Cons:**
-  - Adds complexity (message queues, job management).
-  - Need to handle failures and retries.
-
-### Recommended strategy
-
-Use a combination:
-
-- Add the composite index (Stage 3).
-- Cache unread counts and recent notifications with Redis.
-- Use background workers for heavy operations like `notify_all`.
-
-This gives the best balance of performance and scalability.
+This layered approach gives the best balance of performance, reliability, and implementation effort.
 
 ---
 
-# Stage 5 – Reliable and Fast `notify_all` Pseudocode
+# Stage 5
 
-Original pseudocode:
+## Reliable and Fast `notify_all`
+
+### Original pseudocode
 
 ```python
 function notify_all(student_ids: array, message: string):
     for student_id in student_ids:
-        send_email(student_id, message)  # calls Email API
-        save_to_db(student_id, message)  # DB insert
-        push_to_app(student_id, message) # real-time notification
+        send_email(student_id, message)   # calls Email API
+        save_to_db(student_id, message)   # DB insert
+        push_to_app(student_id, message)  # real-time notification
 ```
 
-## Shortcomings of this implementation
+### Shortcomings
 
-1. **No error handling**:
-   - If `send_email` fails for some students, the loop continues but we don’t know or retry.
-2. **No logging**:
-   - No logs to track which students succeeded or failed.
-3. **No retries**:
-   - If email fails mid-way for 200 students, those students never get the email.
-4. **Sequential processing**:
-   - For 50,000 students, this is very slow.
-5. **No separation of concerns**:
-   - DB insert and email send are in the same loop; if one fails, we don’t know what to do.
-6. **Not scalable**:
-   - Not suitable for large batch notifications in real time.
+1. **No error handling** — if `send_email` fails for any student, the loop continues silently and those students never receive the email.
+2. **No logging** — there is no record of which students succeeded or failed.
+3. **No retries** — transient failures (network blip, rate-limit) are permanent.
+4. **Sequential processing** — iterating one-by-one over 50,000 students is extremely slow.
+5. **Coupled concerns** — DB save and external API call are in the same synchronous step; a failure in one affects the other with no recovery path.
+6. **Not scalable** — unsuitable for large-scale batch notifications.
 
-## What if `send_email` fails for 200 students midway?
+### What happens if `send_email` fails for 200 students midway?
 
-- Those 200 students don’t get the email.
-- We have no record of failure.
-- We don’t retry.
+Those 200 students silently miss the email. There is no failure record, no retry, and no way to identify which students were affected without examining logs (which don't exist).
 
-## Redesign for reliability and speed
+### Redesigned pseudocode
 
-### Key ideas
-
-- **Use a job queue** for email sending and in-app notifications.
-- **Separate DB insert from email send**:
-  - Save to DB first, so we have a record.
-  - Then enqueue email and in-app tasks.
-- **Use retries with logging** for email and in-app notifications.
-- **Process in batches**, not one-by-one.
-- **Use logging middleware** to track success/failure.
-
-## Revised pseudocode
+**Key principles:**
+- Save to DB first — always have a record before attempting delivery.
+- Enqueue email and in-app tasks separately — decouple delivery from the record of intent.
+- Use a job queue with retries and failure callbacks.
+- Process students in batches to avoid memory pressure.
+- Log every step with structured fields.
 
 ```python
 function notify_all(student_ids: array, message: string):
-    # Step 1: Save all notifications to DB first
-    for batch in batch(student_ids, size=1000):
+    # Step 1: Persist all notifications to DB first (bulk insert per batch)
+    for batch in chunk(student_ids, size=1000):
         for student_id in batch:
-            # Use logging middleware
-            logger.info("Creating notification for student", student_id=student_id)
-
+            logger.info("Saving notification", student_id=student_id)
             save_to_db(
                 student_id=student_id,
                 message=message,
                 notification_type="PLACEMENT",
                 status="UNREAD"
             )
-
-            # Enqueue email and in-app tasks
+            # Enqueue delivery tasks (non-blocking)
             enqueue_email_task(student_id=student_id, message=message)
             enqueue_inapp_task(student_id=student_id, message=message)
-
-    # Step 2: Background workers will process email and in-app tasks
-    # with retries and logging
 
 function enqueue_email_task(student_id: string, message: string):
     logger.info("Enqueueing email task", student_id=student_id)
     job_queue.enqueue(
         job="send_email",
-        args={
-            "student_id": student_id,
-            "message": message
-        }
+        args={ "student_id": student_id, "message": message },
         retry_count=3,
-        on_failure=lambda: logger.error("Email send failed", student_id=student_id)
+        on_failure=lambda: logger.error("Email send failed permanently", student_id=student_id)
     )
 
 function enqueue_inapp_task(student_id: string, message: string):
     logger.info("Enqueueing in-app task", student_id=student_id)
     job_queue.enqueue(
         job="push_to_app",
-        args={
-            "student_id": student_id,
-            "message": message
-        }
+        args={ "student_id": student_id, "message": message },
         retry_count=3,
-        on_failure=lambda: logger.error("In-app push failed", student_id=student_id)
+        on_failure=lambda: logger.error("In-app push failed permanently", student_id=student_id)
     )
 ```
 
-### Should DB save and email send happen together?
+### Should DB save and email send happen in the same call?
 
-- **No**, they should not happen together in the same synchronous call.
-- **Reasons:**
-  - Email sending is external and can fail; DB save should be reliable.
-  - Separating them allows:
-    - DB to be updated first, so we have a record.
-    - Email to be sent asynchronously via a queue with retries.
-  - This improves reliability and speed.
+**No.** They must be separated because:
+- Email delivery is an external call that can fail for reasons outside our control.
+- The DB record is the source of truth — it must be written regardless of delivery outcome.
+- Separating them allows the DB to be updated atomically while email/in-app delivery retries independently via the queue.
+- This pattern (transactional outbox) ensures no notification is silently lost.
 
 ---
 
-# Stage 6 – Priority Inbox (Top 10 Notifications)
+# Stage 6
 
-Goal:  
-Implement a Priority Inbox that always displays the top `n` most important unread notifications first (e.g., top 10).  
-Priority is determined by:
+## Priority Inbox — Top N Unread Notifications
 
-- **Weight**: `placement > result > event`
-- **Recency**: newer notifications are more important
+### Objective
 
-You must:
+Display the top `n` (default 10) most important unread notifications first. Priority is determined by:
 
-- Use the provided Notification API:
-  `GET http://4.224.186.213/evaluation-service/notifications`
-- Find the top 10 unread notifications.
-- Use your **logging middleware** extensively.
-- Write real code (not pseudocode).
-- Push code and screenshots to the same GitHub repo.
-- Explain your approach in this section.
+- **Type weight**: `placement (3) > result (2) > event (1)`
+- **Recency**: newer notifications rank higher within the same weight class
 
-## Approach
+### Approach
 
-1. Fetch all notifications from the API.
-2. Filter only unread notifications.
-3. Assign a numeric priority score to each notification:
-   - Base weight:
-     - `placement`: 3
-     - `result`: 2
-     - `event`: 1
-   - Recency factor: use `createdAt` (e.g., timestamp) to boost newer notifications.
-4. Sort by score descending.
-5. Return top 10.
+1. Fetch all notifications from the evaluation API.
+2. Filter to unread only (`isRead = false`).
+3. Compute a **composite priority score** for each notification:
 
-### Example score formula
-
-```python
-priority_score = type_weight * (1 + recency_factor)
+```
+priority_score = type_weight × (1 + recency_factor)
 ```
 
 Where:
+- `type_weight` = 3 for Placement, 2 for Result, 1 for Event, 0 for unknown
+- `recency_factor` = `notification_timestamp / current_timestamp` (always in (0, 1])
 
-- `type_weight` = 3 for `Placement`, 2 for `Result`, 1 for `Event`
-- `recency_factor` = some value based on `createdAt` (e.g., `timestamp / max_timestamp`)
+This formula ensures a Placement always outranks a Result of the same age, while a very recent Result can outrank a stale Placement via the recency boost.
 
-Alternatively, you can:
+4. Sort all unread notifications by score descending.
+5. Return the top N.
 
-- Sort first by type weight (placement, result, event), then by `createdAt` descending.
+### Maintaining top N efficiently as new notifications arrive
 
-## Python implementation example
+| Approach | How it works | Best for |
+|----------|-------------|----------|
+| **Recompute on request** | Fetch all, filter, score, sort, slice on every call | Low traffic, simple setup |
+| **Redis cache** | Cache top-N per user, invalidate on new notification or read event | Medium-high traffic |
+| **Redis Sorted Set** | Insert each notification with its score; `ZREVRANGE` returns top-N in O(log N) | High-volume, real-time feeds |
 
-```python
-import requests
-from typing import List, Dict
+For this implementation, recompute-on-request is used. The Redis Sorted Set approach is recommended for production.
 
-import logging
-from logging_utils import get_logger  # your logging middleware wrapper
+### Files
 
-logger = get_logger("priority_inbox")
+| File | Purpose |
+|------|---------|
+| `priority_inbox.py` | Main script — fetch, filter, score, display top N |
+| `logging_utils.py` | Structured logging middleware used throughout |
 
-def get_type_weight(notification_type: str) -> int:
-    """
-    Assign weight based on notification type.
-    placement > result > event
-    """
-    type_map = {
-        "Placement": 3,
-        "Result": 2,
-        "Event": 1,
-    }
-    return type_map.get(notification_type, 0)
-
-def fetch_notifications(api_url: str) -> List[Dict]:
-    """
-    Fetch notifications from the API.
-    Uses logging middleware for request logging.
-    """
-    logger.info("Fetching notifications from API", url=api_url)
-    response = requests.get(api_url)
-    if response.status_code != 200:
-        logger.error("API request failed", status_code=response.status_code, url=api_url)
-        raise RuntimeError(f"API request failed with status {response.status_code}")
-
-    logger.info("Successfully fetched notifications", count=len(response.json()))
-    return response.json()
-
-def compute_priority_score(notification: Dict) -> float:
-    """
-    Compute priority score based on type weight and recency.
-    """
-    type_weight = get_type_weight(notification.get("notificationType", ""))
-    created_at = notification.get("createdAt", "")
-
-    # Simple recency factor: convert to timestamp (you can adjust this)
-    # For simplicity, assume createdAt is in ISO format or timestamp.
-    # Here we use a dummy factor based on string length for demo;
-    # in real code, parse to datetime and compute timestamp.
-    import datetime
-    try:
-        dt = datetime.datetime.fromisoformat(created_at)
-        timestamp = dt.timestamp()
-    except Exception as e:
-        logger.warning("Failed to parse createdAt", createdAt=created_at, error=str(e))
-        timestamp = 0
-
-    # Normalize timestamp (example: assume max timestamp is ~now)
-    max_timestamp = datetime.datetime.now().timestamp()
-    recency_factor = timestamp / max_timestamp if max_timestamp > 0 else 0
-
-    priority_score = type_weight * (1 + recency_factor)
-    return priority_score
-
-def get_top_n_unread_notifications(
-    notifications: List[Dict],
-    n: int = 10
-) -> List[Dict]:
-    """
-    Filter unread notifications, compute priority score,
-    sort by score descending, and return top n.
-    """
-    logger.info("Filtering unread notifications")
-    unread = [
-        nb for nb in notifications
-        if nb.get("isRead") is False
-    ]
-    logger.info("Filtered unread notifications", count=len(unread))
-
-    for nb in unread:
-        nb["_priority_score"] = compute_priority_score(nb)
-
-    logger.info("Sorting notifications by priority score")
-    sorted_notifications = sorted(
-        unread,
-        key=lambda nb: nb["_priority_score"],
-        reverse=True
-    )
-
-    top_n = sorted_notifications[:n]
-    logger.info("Selected top N notifications", n=n, count=len(top_n))
-    return top_n
-
-def main():
-    api_url = "http://4.224.186.213/evaluation-service/notifications"
-    logger.info("Starting Priority Inbox")
-
-    notifications = fetch_notifications(api_url)
-    top_10 = get_top_n_unread_notifications(notifications, n=10)
-
-    logger.info("Top 10 unread priority notifications:")
-    for i, nb in enumerate(top_10, start=1):
-        logger.info(
-            f"#{i}",
-            id=nb.get("id"),
-            title=nb.get("title"),
-            type=nb.get("notificationType"),
-            priority_score=nb["_priority_score"],
-            createdAt=nb.get("createdAt")
-        )
-
-    return top_10
-
-if __name__ == "__main__":
-    main()
-```
-
-## Maintaining top 10 efficiently as new notifications come in
-
-Options:
-
-1. **Recompute on each request**:
-   - Fetch all, filter unread, compute score, sort, and take top 10.
-   - Simple, but may be slow if there are many notifications.
-
-2. **Cache top 10**:
-   - Cache the top 10 unread notifications in Redis.
-   - Invalidate or update cache when:
-     - A new notification is created.
-     - A notification is marked as read/deleted.
-   - This is more efficient for high read volume.
-
-3. **Use a sorted data structure**:
-   - Use a sorted set (e.g., Redis Sorted Set) keyed by priority score.
-   - Insert new notifications with their score.
-   - Query top N in O(log N).
-
-For this assignment, recomputing on each request is acceptable, but you can mention caching as an optimization.
-
-## Files to push
-
-- `priority_inbox.py` (or `.js`, `.ts`, etc.) – your code file.
-- Screenshots showing the top 10 priority notifications printed/displayed.
-
-Update your `notification_system_design.md` with this section (already added above), then push:
+### Running the script
 
 ```bash
-git add notification_system_design.md priority_inbox.py
-git commit -m "feat: add Stage 6 Priority Inbox code and explanation"
-git push origin main
-```
+pip install requests
 
-Then take screenshots of the output and push them too.
+# Top 10 (default)
+python priority_inbox.py
+
+# Top 15
+python priority_inbox.py --top 15
+
+# Top 20
+python priority_inbox.py --top 20
+```
